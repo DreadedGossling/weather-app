@@ -2,7 +2,9 @@
   <div
     id="app"
     :class="
-      typeof weather.main != 'undefined' && weather.main.temp > 16 ? 'warm' : ''
+      typeof weather.main != 'undefined' && weather.main.temp > 16
+        ? 'warm'
+        : 'cold'
     "
   >
     <main>
@@ -16,10 +18,20 @@
         />
       </div>
 
-      <div class="weather-wrap" v-if="typeof weather.main != 'undefined'">
-       
-       <div class="location-box">
-          <div class="location">{{ weather.name }}, {{ weather.sys.country }}</div>
+      <div v-if="loading" class="loader-container">
+        <div class="loader"></div>
+      </div>
+
+      <div v-if="error && !loading" class="error">{{ error }}</div>
+
+      <div
+        class="weather-wrap"
+        v-if="!loading && typeof weather.main != 'undefined'"
+      >
+        <div class="location-box">
+          <div class="location">
+            {{ weather.name }}, {{ getCountryName(weather.sys.country) }}
+          </div>
           <div class="date">{{ dateFormat() }}</div>
         </div>
 
@@ -32,9 +44,46 @@
             />
           </div>
           <div class="weather">{{ weather.weather[0].main }}</div>
-          <div class="weather-description">{{ weather.weather[0].description }}</div>
-        </div>
+          <div class="weather-description">
+            {{ weather.weather[0].description }}
+          </div>
 
+          <ul class="weather-detail-list">
+            <li><strong>Temperature:</strong> {{ weather.main.temp }} °C</li>
+            <li>
+              <strong>Feels Like:</strong> {{ weather.main.feels_like }} °C
+            </li>
+            <li><strong>Humidity:</strong> {{ weather.main.humidity }}%</li>
+            <li><strong>Pressure:</strong> {{ weather.main.pressure }} hPa</li>
+            <li>
+              <strong>Sea Level:</strong>
+              {{ weather.main.sea_level || "N/A" }} hPa
+            </li>
+            <li>
+              <strong>Ground Level:</strong>
+              {{ weather.main.grnd_level || "N/A" }} hPa
+            </li>
+            <li><strong>Min Temp:</strong> {{ weather.main.temp_min }} °C</li>
+            <li><strong>Max Temp:</strong> {{ weather.main.temp_max }} °C</li>
+            <li>
+              <strong>Timezone:</strong> {{ formatTimezone(weather.timezone) }}
+            </li>
+            <li>
+              <strong>Sunrise:</strong>
+              {{ convertToIST(weather.sys.sunrise) }}
+              <!-- {{ formatTime(weather.sys.sunrise, weather.timezone) }} -->
+            </li>
+            <li>
+              <strong>Sunset:</strong>
+              {{ convertToIST(weather.sys.sunset) }}
+              <!-- {{ formatTime(weather.sys.sunset, weather.timezone) }} -->
+            </li>
+            <li>
+              <strong>Visibility:</strong>
+              {{ formatVisibility(weather.visibility) }}
+            </li>
+          </ul>
+        </div>
       </div>
     </main>
   </div>
@@ -45,31 +94,100 @@ export default {
   name: "app",
   data() {
     return {
-      api_key: "fefc8eb83c740ee4920f11f596c9a348",
+      api_key: import.meta.env.VITE_API_TOKEN,
       url_base: "https://api.openweathermap.org/data/2.5/",
       query: "",
       weather: {},
+      error: false,
+      loading: false,
+      loadedOnce: false,
     };
   },
+  mounted() {
+    const lastCity = localStorage.getItem("lastCity");
+    if (lastCity) {
+      this.query = lastCity;
+      this.fetchWeather({ key: "Enter" });
+    } else if (!this.loadedOnce && navigator.geolocation) {
+      this.loading = true;
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          const lat = position.coords.latitude;
+          const lon = position.coords.longitude;
+          await this.fetchWeatherByLocation(lat, lon);
+          this.loadedOnce = true;
+          this.loading = false;
+        },
+        (err) => {
+          console.warn("Geolocation failed or denied:", err);
+          this.loading = false;
+          this.error = "Unable to fetch location";
+        }
+      );
+    }
+  },
   methods: {
-    fetchWeather(e) {
-      if (e.key == "Enter") {
-        fetch(
-          `${this.url_base}weather?q=${this.query}&units=metric&APPID=${this.api_key}`
-        )
-          .then((res) => {
-            return res.json();
-          })
-          .then(this.setResults);
+    async fetchWeatherByLocation(lat, lon) {
+      this.error = false;
+      try {
+        const res = await fetch(
+          `${this.url_base}weather?lat=${lat}&lon=${lon}&units=metric&APPID=${this.api_key}`
+        );
+        const data = await res.json();
+
+        if (res.ok && data?.main) {
+          this.weather = data;
+          this.error = false;
+          localStorage.setItem("lastCity", data.name); // ✅ Save city from coordinates
+        } else {
+          this.weather = {};
+          this.error = "City not found";
+        }
+      } catch (err) {
+        console.error("Location-based fetch error:", err);
+        this.weather = {};
+        this.error = "Failed to fetch data";
+      }
+    },
+    async fetchWeather(e) {
+      if (e.key === "Enter" && this.query.trim() !== "") {
+        this.error = false;
+        this.loading = true;
+
+        try {
+          const res = await fetch(
+            `${this.url_base}weather?q=${this.query}&units=metric&APPID=${this.api_key}`
+          );
+          const data = await res.json();
+          console.log("object", data);
+
+          if (res.ok && data?.main) {
+            this.weather = data;
+            this.error = false;
+            localStorage.setItem("lastCity", this.query); // ✅ Save city
+          } else if (data.cod === "404") {
+            this.weather = {};
+            this.error = "City not found";
+          } else {
+            this.weather = {};
+            this.error = "Something went wrong";
+          }
+        } catch (err) {
+          console.error("Fetch error:", err);
+          this.weather = {};
+          this.error = "Failed to fetch data";
+        } finally {
+          this.loading = false;
+          this.query = "";
+        }
       }
     },
     setResults(results) {
-      console.log("object", results);
       this.weather = results;
     },
     dateFormat() {
-      let d = new Date();
-      let months = [
+      const d = new Date();
+      const months = [
         "January",
         "February",
         "March",
@@ -83,7 +201,7 @@ export default {
         "November",
         "December",
       ];
-      let days = [
+      const days = [
         "Sunday",
         "Monday",
         "Tuesday",
@@ -92,17 +210,46 @@ export default {
         "Friday",
         "Saturday",
       ];
+      return `${days[d.getDay()]} ${d.getDate()} ${
+        months[d.getMonth()]
+      } ${d.getFullYear()}`;
+    },
+    formatTime(unixTime, timezoneOffset) {
+      const utc = unixTime * 1000;
+      const localTime = new Date(utc + timezoneOffset * 1000);
 
-      let day = days[d.getDay()];
-      let date = d.getDate();
-      let month = months[d.getMonth()];
-      let year = d.getFullYear();
+      return localTime.toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      });
+    },
+    convertToIST(unixTime) {
+      return new Date(unixTime * 1000).toLocaleTimeString("en-IN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+        timeZone: "Asia/Kolkata",
+      });
+    },
 
-      return `${day} ${date} ${month} ${year}`;
+    formatVisibility(value) {
+      return `${value / 1000} km`;
+    },
+
+    formatTimezone(offset) {
+      const hours = offset / 3600;
+      const sign = hours >= 0 ? "+" : "-";
+      return `UTC${sign}${Math.abs(hours)}`;
+    },
+    getCountryName(code) {
+      const regionNames = new Intl.DisplayNames(["en"], { type: "region" });
+      return regionNames.of(code); // e.g., "India"
     },
   },
 };
 </script>
+
 
 <style>
 * {
@@ -116,7 +263,6 @@ body {
 }
 
 #app {
-  background-image: url("./assets/cold.jpg");
   background-size: cover;
   background-position: bottom;
   transition: 0.4s;
@@ -124,6 +270,10 @@ body {
 
 #app.warm {
   background-image: url("./assets/hot.jpg");
+}
+
+#app.cold {
+  background-image: url("./assets/cold.jpg");
 }
 
 main {
@@ -162,6 +312,12 @@ main {
   box-shadow: 0px 0px 16px rgba(0, 0, 0, 0.25);
   background-color: rgba(255, 255, 255, 0.75);
   border-radius: 6px 0px 16px 0px;
+}
+
+.error {
+  text-align: center;
+  color: #fff;
+  font-size: 20px;
 }
 
 .location-box .location {
@@ -216,6 +372,24 @@ main {
   position: center;
 }
 
+.weather-detail-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 20px;
+  padding: 16px;
+  background-color: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  border-radius: 8px;
+  font-size: 14px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(6px);
+}
+
+.weather-detail-list li {
+  list-style-type: none;
+}
+
 @media (min-width: 1024px) {
   .search-box {
     margin-top: 5%;
@@ -240,6 +414,40 @@ main {
     background-color: rgba(255, 252, 252, 0.773);
     border-radius: 10px 10px 10px 10px;
     transition: 0.4s;
+  }
+  .weather-detail-list {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 450px) {
+  .weather-detail-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+.loader-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-top: 40px;
+}
+
+.loader {
+  border: 6px solid #f3f3f3;
+  border-top: 6px solid #3498db;
+  border-radius: 50%;
+  width: 48px;
+  height: 48px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
   }
 }
 </style>
